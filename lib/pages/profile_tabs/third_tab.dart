@@ -17,7 +17,7 @@ class ThirdProfileTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     usernameController.text = data["username"];
-    passwordContreoller.text = data["password"];
+    passwordContreoller.text = '••••••••';
     emailController.text = data["email"];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 39),

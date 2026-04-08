@@ -1,6 +1,8 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:study_app/pages/firebase_services.dart/auth.dart';
+import 'package:study_app/constants.dart';
+import 'package:study_app/services/auth_storage.dart';
+import 'package:study_app/services/google_sign_in_helper.dart';
+import 'package:study_app/services/study_api.dart';
 
 part 'login_state.dart';
 
@@ -10,14 +12,47 @@ class LoginCubit extends Cubit<LoginState> {
   Future<void> LoginUser({required email, required password}) async {
     emit(LoginLoading());
     try {
-      await signInUser(email, password);
+      final body = await StudyApi().login(email: email as String, password: password as String);
+      final token = body['access_token'] as String;
+      await AuthStorage.saveSession(token: token, email: email as String);
       emit(LoginSuccess());
-    } on FirebaseAuthException catch (e) {
-      if (e.code == "invalid-email") {
-        emit(LoginFailure(errMessage: "The email address is badly formatted."));
-      } else if (e.code == 'invalid-credential') {
-        emit(LoginFailure(errMessage: "No user found for that email."));
+    } on StudyApiException catch (e) {
+      emit(LoginFailure(errMessage: e.message));
+    } catch (e) {
+      emit(LoginFailure(errMessage: e.toString()));
+    }
+  }
+
+  Future<void> signInWithGoogle() async {
+    emit(LoginLoading());
+    try {
+      if (googleWebClientId().isEmpty) {
+        emit(LoginFailure(
+            errMessage:
+                'Set GOOGLE_WEB_CLIENT_ID when running the app (Web OAuth client ID from Google Cloud).'));
+        return;
       }
+      final google = createGoogleSignIn();
+      final account = await google.signIn();
+      if (account == null) {
+        emit(LoginInitial());
+        return;
+      }
+      final auth = await account.authentication;
+      final idToken = auth.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        emit(LoginFailure(
+            errMessage:
+                'No Google ID token. On iOS, set GIDClientID and URL scheme in Info.plist; use the same Web client ID here.'));
+        return;
+      }
+      final body = await StudyApi().loginWithGoogle(idToken: idToken);
+      final token = body['access_token'] as String;
+      final email = body['email'] as String? ?? account.email;
+      await AuthStorage.saveSession(token: token, email: email);
+      emit(LoginSuccess(email: email));
+    } on StudyApiException catch (e) {
+      emit(LoginFailure(errMessage: e.message));
     } catch (e) {
       emit(LoginFailure(errMessage: e.toString()));
     }
@@ -25,7 +60,6 @@ class LoginCubit extends Cubit<LoginState> {
 
   @override
   void onChange(Change<LoginState> change) {
-    // TODO: implement onChange
     super.onChange(change);
     print(change);
   }

@@ -4,7 +4,10 @@ sealed class LoginState {}
 
 final class LoginInitial extends LoginState {}
 
-final class LoginSuccess extends LoginState {}
+final class LoginSuccess extends LoginState {
+  LoginSuccess({this.email});
+  final String? email;
+}
 
 final class LoginFailure extends LoginState {
   final String errMessage;

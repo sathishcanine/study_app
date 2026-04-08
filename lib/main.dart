@@ -7,16 +7,11 @@ import 'package:study_app/pages/intro_pages/get_started.dart';
 import 'package:study_app/pages/login_page.dart';
 import 'package:study_app/pages/onBoarding_page.dart';
 import 'package:study_app/pages/sign_up_page.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:study_app/pages/splashScreen.dart';
 import 'package:showcaseview/showcaseview.dart';
-import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
   runApp(const Quiz());
 }
 

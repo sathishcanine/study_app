@@ -5,41 +5,50 @@ import 'package:study_app/pages/firebase_services.dart/firestore.dart';
 import 'package:study_app/widgets/home_page_widget.dart';
 import 'package:study_app/widgets/loading_widget.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   static String id = "/home_page";
 
-  HomePage({
+  const HomePage({
+    super.key,
     required this.emails,
     required this.first,
   });
 
-  String? username;
   final bool first;
   final String emails;
 
-  Map<String, dynamic>? data;
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
 
-  bool isLoading = false;
-  String? email;
-  int? score;
+class _HomePageState extends State<HomePage> {
+  Future<Map<String, dynamic>>? _profileFuture;
+  String? _email;
 
-  bool hide = false;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_profileFuture != null) return;
+
+    if (widget.first) {
+      _email = widget.emails;
+    } else {
+      _email = ModalRoute.of(context)?.settings.arguments as String?;
+    }
+
+    if (_email == null || _email!.isEmpty) {
+      return;
+    }
+
+    _profileFuture = getUserDetails(id: _email!);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (first == true) {
-      email = emails;
-    } else {
-      email = ModalRoute.of(context)!.settings.arguments as String;
-    }
-
     return PopScope(
       canPop: false,
-      child: FutureBuilder(
-        future: getUserDetails(id: email!),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Container(
+      child: _profileFuture == null
+          ? Container(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
@@ -53,23 +62,42 @@ class HomePage extends StatelessWidget {
               child: const LoadingWidget(
                 color: Colors.white,
               ),
-            );
-          } else if (snapshot.hasData) {
-            data = snapshot.data!.data() as Map<String, dynamic>;
-            score = data!["score"];
-            username = data!["username"];
-            return HomePageWidget(
-              data: data!,
-              username: username,
-              email: email,
-              score: score!,
-              first: first,
-            );
-          } else {
-            return Text(snapshot.error.toString());
-          }
-        },
-      ),
+            )
+          : FutureBuilder<Map<String, dynamic>>(
+              future: _profileFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          kPrimaryColor,
+                          const Color(0xff5C3B7E),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                    child: const LoadingWidget(
+                      color: Colors.white,
+                    ),
+                  );
+                } else if (snapshot.hasData) {
+                  final data = snapshot.data!;
+                  final username = data["username"] as String?;
+                  final score = data["score"] as int;
+                  return HomePageWidget(
+                    data: data,
+                    username: username,
+                    email: _email,
+                    score: score,
+                    first: widget.first,
+                  );
+                } else {
+                  return Text(snapshot.error.toString());
+                }
+              },
+            ),
     );
   }
 }

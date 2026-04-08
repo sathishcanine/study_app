@@ -1,7 +1,7 @@
 // ignore_for_file: must_be_immutable
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:study_app/services/auth_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:page_transition/page_transition.dart';
 import 'package:study_app/constants.dart';
@@ -200,9 +200,11 @@ class _HomePageWidgetState extends State<HomePageWidget> {
                     height: 15,
                   ),
                   DrawerListTile(
-                    onTap: () {
-                      FirebaseAuth.instance.signOut();
-                      Navigator.popAndPushNamed(context, LogInPage.id);
+                    onTap: () async {
+                      await AuthStorage.clear();
+                      if (context.mounted) {
+                        Navigator.popAndPushNamed(context, LogInPage.id);
+                      }
                     },
                     icon: Icons.logout,
                     title: "Logout",

@@ -11,6 +11,7 @@ import 'package:study_app/pages/cubits/login_cubit/login_cubit.dart';
 import 'package:study_app/pages/home_page.dart';
 import 'package:study_app/pages/sign_up_page.dart';
 import 'package:study_app/widgets/ArrowButton.dart';
+import 'package:study_app/widgets/google_sign_in_button.dart';
 import 'package:study_app/widgets/Login_textfield.dart';
 
 class LogInPage extends StatelessWidget {
@@ -28,7 +29,10 @@ class LogInPage extends StatelessWidget {
         } else if (state is LoginSuccess) {
           toastSuccess(message: "Welcome to Quizzo!", context: context);
           isLoading = false;
-          Navigator.pushNamed(context, HomePage.id, arguments: email);
+          final navEmail = state.email ?? email;
+          if (navEmail != null && navEmail.isNotEmpty) {
+            Navigator.pushNamed(context, HomePage.id, arguments: navEmail);
+          }
         } else if (state is LoginFailure) {
           isLoading = false;
           toastFailure(message: state.errMessage, context: context);
@@ -138,7 +142,17 @@ class LogInPage extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(
-                            height: 50,
+                            height: 28,
+                          ),
+                          GoogleSignInButton(
+                            enabled: !isLoading,
+                            onPressed: () {
+                              BlocProvider.of<LoginCubit>(context)
+                                  .signInWithGoogle();
+                            },
+                          ),
+                          const SizedBox(
+                            height: 36,
                           ),
                           Text(
                             "OR",

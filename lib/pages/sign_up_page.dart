@@ -11,6 +11,7 @@ import 'package:study_app/helper/show_toast.dart';
 import 'package:study_app/pages/cubits/signup_cubit/signup_cubit.dart';
 import 'package:study_app/pages/home_page.dart';
 import 'package:study_app/widgets/ArrowButton.dart';
+import 'package:study_app/widgets/google_sign_in_button.dart';
 import 'package:study_app/widgets/signUptextfield_widget.dart';
 import 'package:showcaseview/showcaseview.dart';
 
@@ -29,12 +30,13 @@ class SignUpPage extends StatelessWidget {
           isLoading = true;
         } else if (state is SignupSuccess) {
           isLoading = false;
+          final navEmail = state.email ?? email!;
           Navigator.push(
             context,
             PageTransition(
               child: ShowCaseWidget(
                 builder: (BuildContext context) => HomePage(
-                  emails: email!,
+                  emails: navEmail,
                   first: true,
                 )),
               type: PageTransitionType.rightToLeft,
@@ -160,7 +162,18 @@ class SignUpPage extends StatelessWidget {
                       ),
                     ),
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.symmetric(horizontal: 0),
+                      child: GoogleSignInButton(
+                        enabled: !isLoading,
+                        label: 'Sign up with Google',
+                        onPressed: () {
+                          BlocProvider.of<SignupCubit>(context)
+                              .signUpWithGoogle();
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 24, bottom: 20),
                       child: Text(
                         "OR",
                         style: TextStyle(

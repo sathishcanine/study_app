@@ -14,8 +14,8 @@ import 'package:study_app/widgets/correction_widget.dart';
 import 'package:study_app/widgets/score_widget.dart';
 import 'package:dashed_circular_progress_bar/dashed_circular_progress_bar.dart';
 
-class ResultPage extends StatelessWidget {
-  ResultPage({
+class ResultPage extends StatefulWidget {
+  const ResultPage({
     super.key,
     required this.playerResults,
     required this.questions,
@@ -25,44 +25,75 @@ class ResultPage extends StatelessWidget {
     required this.diffiuclty,
     required this.catId,
   });
+
   final List<String> playerResults;
-  final ValueNotifier<double> _valueNotifier = ValueNotifier(0);
   final List<Question> questions;
   final String type, email, diffiuclty, catId;
   final List<Map<String, dynamic>> playerSelectedResponses;
-  final AudioPlayer player = AudioPlayer();
-  int score = 0, totalQuestions = 0, correct = 0, skipped = 0, wrong = 0;
 
-  Future<void> playSound() async {
-    String soundPath =
-        "sounds/level-complete-mobile-game-app-locran-1-00-06.mp3"; //You don't need to include assets/ because AssetSource assume that you have sound in your assets folder.
-    await player.play(AssetSource(soundPath));
+  @override
+  State<ResultPage> createState() => _ResultPageState();
+}
+
+class _ResultPageState extends State<ResultPage> {
+  late final ValueNotifier<double> _valueNotifier;
+  late final AudioPlayer _player;
+  late final int score;
+  late final int totalQuestions;
+  late final int correct;
+  late final int skipped;
+  late final int wrong;
+
+  @override
+  void initState() {
+    super.initState();
+    _valueNotifier = ValueNotifier(0);
+    _player = AudioPlayer();
+    int s = 0, c = 0, sk = 0, w = 0;
+    final n = widget.playerResults.length;
+    for (String response in widget.playerResults) {
+      if (response == "true") {
+        s += 10;
+        c++;
+      } else if (response == "false") {
+        w++;
+      } else {
+        sk++;
+      }
+    }
+    score = s;
+    totalQuestions = n;
+    correct = c;
+    skipped = sk;
+    wrong = w;
+    updateUserDetails(
+      id: widget.email,
+      score: score,
+      questionNumbers: widget.questions.length - skipped,
+      correctAnswers: correct,
+      catName: widget.questions[0].name,
+      questionlength: widget.questions.length,
+      difficulty: widget.diffiuclty,
+      date: DateTime.now(),
+    ).catchError((_) {});
+    _playSound();
+  }
+
+  Future<void> _playSound() async {
+    const soundPath =
+        "sounds/level-complete-mobile-game-app-locran-1-00-06.mp3";
+    await _player.play(AssetSource(soundPath));
+  }
+
+  @override
+  void dispose() {
+    _valueNotifier.dispose();
+    _player.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    totalQuestions = playerResults.length;
-    for (String response in playerResults) {
-      if (response == "true") {
-        score += 10;
-        correct++;
-      } else if (response == "false") {
-        wrong++;
-      } else {
-        skipped++;
-      }
-    }
-    updateUserDetails(
-      id: email,
-      score: score,
-      questionNumbers: questions.length - skipped,
-      correctAnswers: correct,
-      catName: questions[0].name,
-      questionlength: questions.length,
-      difficulty: diffiuclty,
-      date: DateTime.now(),
-    );
-    playSound();
     return PopScope(
       canPop: false,
       child: Container(
@@ -86,7 +117,7 @@ class ResultPage extends StatelessWidget {
                   Navigator.popAndPushNamed(
                     context,
                     HomePage.id,
-                    arguments: email,
+                    arguments: widget.email,
                   );
                 },
               ),
@@ -131,9 +162,11 @@ class ResultPage extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 20),
                           child: DashedCircularProgressBar.aspectRatio(
-                            aspectRatio: 3.3, // width ÷ height
+                            aspectRatio: 3.3,
                             valueNotifier: _valueNotifier,
-                            progress: (correct * 100) / totalQuestions,
+                            progress: totalQuestions == 0
+                                ? 0
+                                : (correct * 100) / totalQuestions,
                             maxProgress: 100,
                             corners: StrokeCap.butt,
                             foregroundColor: const Color(0xffA76AE4),
@@ -233,11 +266,11 @@ class ResultPage extends StatelessWidget {
                       context,
                       PageTransition(
                         child: QuestionPage(
-                          catId: catId,
-                          difficulty: diffiuclty,
-                          questionNumber: questions.length.toString(),
-                          type: type,
-                          email: email,
+                          catId: widget.catId,
+                          difficulty: widget.diffiuclty,
+                          questionNumber: widget.questions.length.toString(),
+                          type: widget.type,
+                          email: widget.email,
                         ),
                         type: PageTransitionType.topToBottom,
                         duration: const Duration(milliseconds: 300),
@@ -265,12 +298,12 @@ class ResultPage extends StatelessWidget {
                     context,
                     PageTransition(
                       child: CorrectionUi(
-                        playerSlectedResponses: playerSelectedResponses,
-                        playerResults: playerResults,
+                        playerSlectedResponses: widget.playerSelectedResponses,
+                        playerResults: widget.playerResults,
                         controller: CountDownController(),
-                        questions: questions,
-                        questionsNumber: questions.length,
-                        type: type,
+                        questions: widget.questions,
+                        questionsNumber: widget.questions.length,
+                        type: widget.type,
                       ),
                       type: PageTransitionType.bottomToTop,
                       duration: const Duration(milliseconds: 300),

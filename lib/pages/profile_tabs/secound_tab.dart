@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:study_app/data.dart';
 import 'package:study_app/widgets/history_container.dart';
@@ -16,6 +15,13 @@ class SecoundProfileTab extends StatelessWidget {
     ],
   );
   final CategoriesData catdata = CategoriesData();
+
+  DateTime _historyDate(dynamic raw) {
+    if (raw is String) {
+      return DateTime.tryParse(raw)?.toLocal() ?? DateTime.now();
+    }
+    return DateTime.now();
+  }
 
   String getImageForCategory(String categoryName) {
     categoryName = categoryName.replaceFirst("Science: ", "");
@@ -39,9 +45,9 @@ class SecoundProfileTab extends StatelessWidget {
         itemBuilder: (context, index) {
           int score = data["history"][index]["earnedPoints"];
           String catName = data["history"][index]["catName"];
-          Timestamp date = data["history"][index]["date"];
+          final date = _historyDate(data["history"][index]["date"]);
           String dateString =
-              "${date.toDate().day.toString()}/${date.toDate().month.toString()}/${date.toDate().year.toString()} | ${date.toDate().hour.toString()}:${date.toDate().minute.toString()}";
+              "${date.day}/${date.month}/${date.year} | ${date.hour}:${date.minute.toString().padLeft(2, '0')}";
           String difficulty = data["history"][index]["difficulty"];
           int correctQuestions = data["history"][index]["correctQuestions"];
           int questionNumbers = data["history"][index]["questionNumbers"];
