@@ -1,0 +1,59 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:study_app/pages/cubits/login_cubit/login_cubit.dart';
+import 'package:study_app/pages/cubits/signup_cubit/signup_cubit.dart';
+import 'package:study_app/pages/home_page.dart';
+import 'package:study_app/pages/intro_pages/get_started.dart';
+import 'package:study_app/pages/login_page.dart';
+import 'package:study_app/pages/onBoarding_page.dart';
+import 'package:study_app/pages/sign_up_page.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:study_app/pages/splashScreen.dart';
+import 'package:showcaseview/showcaseview.dart';
+import 'firebase_options.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const Quiz());
+}
+
+class Quiz extends StatelessWidget {
+  const Quiz({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(
+          create: (context) => SignupCubit(),
+        ),
+        BlocProvider(
+          create: (context) => LoginCubit(),
+        ),
+      ],
+      child: MaterialApp(
+        theme: ThemeData(
+          primarySwatch: Colors.deepPurple,
+        ),
+        debugShowCheckedModeBanner: false,
+        title: "Quiz App",
+        routes: {
+          HomePage.id: (context) => ShowCaseWidget(
+              builder: (BuildContext context) => HomePage(
+                emails: "",
+                first: false,
+              )),
+          OnBoardingPage.id: (context) => OnBoardingPage(),
+          GetStartedPage.id: (context) => const GetStartedPage(),
+          LogInPage.id: (context) => LogInPage(),
+          SignUpPage.id: (context) => SignUpPage(),
+          SplashSreen.id: (context) => const SplashSreen(),
+        },
+        initialRoute: SplashSreen.id,
+      ),
+    );
+  }
+}
