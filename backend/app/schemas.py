@@ -38,3 +38,110 @@ class QuizResultIn(BaseModel):
 class LeaderboardEntry(BaseModel):
     username: str
     score: int
+
+
+class GeneratePaperIn(BaseModel):
+    exam_type: str = Field(min_length=2, max_length=50)
+    paper_size: int = Field(default=200, ge=50, le=300)
+    rules_version: str = Field(default="default", max_length=50)
+    current_affairs_date_from: str | None = None
+    current_affairs_date_to: str | None = None
+    force_new: bool = False
+
+
+class JobQueuedOut(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class JobStatusOut(BaseModel):
+    job_id: str
+    status: str
+    progress: int
+    exam_type: str
+    paper_size: int
+    paper_id: str | None
+    message: str
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class QuestionOut(BaseModel):
+    question_no: int
+    subject: str
+    topic: str
+    question_type: str
+    difficulty: str
+    question_text: str
+    options: list[str]
+    answer: str
+    explanation: str
+    marks: int
+
+
+class PaperOut(BaseModel):
+    paper_id: str
+    exam_type: str
+    paper_number: int
+    paper_size: int
+    rules_version: str
+    created_at: datetime
+    questions: list[QuestionOut]
+
+
+# ── Topic-wise bilingual test schemas ───────────────────────────
+
+class GenerateTopicQuestionsIn(BaseModel):
+    topic_slug: str = Field(
+        min_length=2,
+        max_length=100,
+        description="Folder name under data/topics/ e.g. 'indian_polity'",
+    )
+    num_questions: int = Field(
+        default=50,
+        ge=5,
+        le=300,
+        description="Number of questions to generate (same count per language)",
+    )
+
+
+class TopicJobQueuedOut(BaseModel):
+    job_id: str
+    topic_slug: str
+    status: str
+    message: str
+
+
+class TopicJobStatusOut(BaseModel):
+    job_id: str
+    topic_slug: str
+    num_questions: int
+    status: str
+    progress: int
+    message: str
+    error: str | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class TopicQuestionOut(BaseModel):
+    question_pattern_id: str
+    question_no: int
+    difficulty: str
+    language: str
+    question_text: str
+    options: list[str]
+    answer: str
+    explanation: str
+    marks: int
+
+
+class TopicQuestionsOut(BaseModel):
+    topic_slug: str
+    language: str
+    total: int
+    questions: list[TopicQuestionOut]
