@@ -173,6 +173,55 @@ class TopicGenerationJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TopicSetInfo(Base):
+    """
+    Metadata for a generated set.
+    One generation job == one set for (exam_type, subject, topic_slug).
+    """
+
+    __tablename__ = "topic_set_info"
+    __table_args__ = (UniqueConstraint("exam_type", "subject", "topic_slug", "set_no", name="uq_topic_set"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("topic_generation_jobs.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    exam_type: Mapped[str] = mapped_column(String(50), index=True)
+    subject: Mapped[str] = mapped_column(String(100), index=True)
+    topic_slug: Mapped[str] = mapped_column(String(100), index=True)
+    set_no: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ExamBlueprint(Base):
+    """Per-exam configuration root (TNPSC / UPSC / etc)."""
+
+    __tablename__ = "exam_blueprints"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    exam_type: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ExamSubjectBlueprint(Base):
+    """Subject-level difficulty split + generation hints for each exam type."""
+
+    __tablename__ = "exam_subject_blueprints"
+    __table_args__ = (UniqueConstraint("blueprint_id", "subject", name="uq_blueprint_subject"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    blueprint_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("exam_blueprints.id", ondelete="CASCADE"), index=True
+    )
+    subject: Mapped[str] = mapped_column(String(100), index=True)
+    easy_pct: Mapped[int] = mapped_column(Integer, default=10, server_default="10")
+    moderate_pct: Mapped[int] = mapped_column(Integer, default=20, server_default="20")
+    hard_pct: Mapped[int] = mapped_column(Integer, default=70, server_default="70")
+    style_json: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class QuestionPattern(Base):
     """Shared anchor that links the English and Tamil versions of the same question."""
 

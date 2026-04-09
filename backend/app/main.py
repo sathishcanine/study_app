@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,15 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine, get_db
 from app.generate_pipeline import run_generation_job, to_job_status, to_paper_out
 from app.google_verify import verify_google_id_token
-from app.models import GenerationJob, JobStatus, QuestionPaper, QuestionPattern, TopicGenerationJob, User
+from app.models import (
+    GenerationJob,
+    JobStatus,
+    QuestionPaper,
+    QuestionPattern,
+    TopicGenerationJob,
+    TopicSetInfo,
+    User,
+)
 from app.schemas import (
     GeneratePaperIn,
     GenerateTopicQuestionsIn,
@@ -28,11 +36,18 @@ from app.schemas import (
     TokenResponse,
     TopicJobQueuedOut,
     TopicJobStatusOut,
+    TopicSetListOut,
+    TopicSetOut,
     TopicQuestionsOut,
     UserLogin,
     UserRegister,
 )
-from app.topic_pipeline import run_topic_generation_job, topic_job_to_dict, topic_questions_to_dict
+from app.topic_pipeline import (
+    is_valid_subject_for_exam,
+    run_topic_generation_job,
+    topic_job_to_dict,
+    topic_questions_to_dict,
+)
 
 security = HTTPBearer(auto_error=False)
 
@@ -310,11 +325,27 @@ def generate_topic_questions(
 
     Each question gets a shared `question_pattern_id` linking EN and TA versions.
     """
+    exam_type = body.exam_type.upper().strip()
+    subject = body.subject.strip().lower().replace(" ", "_")
+    if not is_valid_subject_for_exam(exam_type, subject):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid subject for exam_type. For TNPSC use one of: "
+                "general_science, current_affairs, geography, history_and_culture_of_india, "
+                "indian_polity, indian_economy, indian_national_movement, "
+                "aptitude_and_mental_ability, tamil_language, english_language."
+            ),
+        )
+
     running = (
         db.query(TopicGenerationJob)
+        .join(TopicSetInfo, TopicSetInfo.job_id == TopicGenerationJob.id)
         .filter(
-            TopicGenerationJob.topic_slug == body.topic_slug,
             TopicGenerationJob.status.in_([JobStatus.QUEUED, JobStatus.PROCESSING]),
+            TopicSetInfo.exam_type == exam_type,
+            TopicSetInfo.subject == subject,
+            TopicSetInfo.topic_slug == body.topic_slug,
         )
         .first()
     )
@@ -331,6 +362,27 @@ def generate_topic_questions(
         message="Queued",
     )
     db.add(job)
+    db.flush()
+
+    set_no_max = (
+        db.query(func.max(TopicSetInfo.set_no))
+        .filter(
+            TopicSetInfo.exam_type == exam_type,
+            TopicSetInfo.subject == subject,
+            TopicSetInfo.topic_slug == body.topic_slug,
+        )
+        .scalar()
+    )
+    next_set_no = int(set_no_max or 0) + 1
+    db.add(
+        TopicSetInfo(
+            job_id=job.id,
+            exam_type=exam_type,
+            subject=subject,
+            topic_slug=body.topic_slug,
+            set_no=next_set_no,
+        )
+    )
     db.commit()
     db.refresh(job)
 
@@ -344,6 +396,9 @@ def generate_topic_questions(
     background_tasks.add_task(_runner, job.id)
     return TopicJobQueuedOut(
         job_id=str(job.id),
+        set_no=next_set_no,
+        exam_type=exam_type,
+        subject=subject,
         topic_slug=job.topic_slug,
         status=job.status.value,
         message="Topic question generation started",
@@ -364,12 +419,21 @@ def get_topic_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(TopicGenerationJob).filter(TopicGenerationJob.id == uid).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return TopicJobStatusOut(**topic_job_to_dict(job))
+    payload = topic_job_to_dict(job)
+    info = db.query(TopicSetInfo).filter(TopicSetInfo.job_id == job.id).first()
+    if info:
+        payload["set_no"] = info.set_no
+        payload["exam_type"] = info.exam_type
+        payload["subject"] = info.subject
+    return TopicJobStatusOut(**payload)
 
 
 @app.get("/topics/{topic_slug}/questions", response_model=TopicQuestionsOut)
 def get_topic_questions(
     topic_slug: str,
+    exam_type: str,
+    subject: str,
+    set_no: int,
     lang: str = "en",
     db: Session = Depends(get_db),
     _: str = Depends(get_current_user_email),
@@ -381,9 +445,23 @@ def get_topic_questions(
     if lang not in ("en", "ta"):
         raise HTTPException(status_code=400, detail="lang must be 'en' or 'ta'")
 
+    subject_key = subject.strip().lower().replace(" ", "_")
+    set_info = (
+        db.query(TopicSetInfo)
+        .filter(
+            TopicSetInfo.topic_slug == topic_slug,
+            TopicSetInfo.exam_type == exam_type.upper().strip(),
+            TopicSetInfo.subject == subject_key,
+            TopicSetInfo.set_no == set_no,
+        )
+        .first()
+    )
+    if not set_info:
+        raise HTTPException(status_code=404, detail="Set not found for given topic/exam/subject/set_no")
+
     patterns = (
         db.query(QuestionPattern)
-        .filter(QuestionPattern.topic_slug == topic_slug)
+        .filter(QuestionPattern.topic_slug == topic_slug, QuestionPattern.job_id == set_info.job_id)
         .order_by(QuestionPattern.question_no)
         .all()
     )
@@ -393,10 +471,70 @@ def get_topic_questions(
             detail=f"No questions found for topic '{topic_slug}'. Generate them first.",
         )
 
-    questions = topic_questions_to_dict(patterns, lang)
+    questions = topic_questions_to_dict(
+        patterns,
+        lang,
+        set_no=set_info.set_no,
+        exam_type=set_info.exam_type,
+        subject=set_info.subject,
+    )
     return TopicQuestionsOut(
+        set_no=set_info.set_no,
+        exam_type=set_info.exam_type,
+        subject=set_info.subject,
         topic_slug=topic_slug,
         language=lang,
         total=len(questions),
         questions=questions,
+    )
+
+
+@app.get("/topics/{topic_slug}/sets", response_model=TopicSetListOut)
+def get_topic_sets(
+    topic_slug: str,
+    exam_type: str,
+    subject: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    """List all generated sets for a topic/exam/subject."""
+    exam_type_key = exam_type.upper().strip()
+    subject_key = subject.strip().lower().replace(" ", "_")
+
+    rows = (
+        db.query(TopicSetInfo, TopicGenerationJob)
+        .join(TopicGenerationJob, TopicGenerationJob.id == TopicSetInfo.job_id)
+        .filter(
+            TopicSetInfo.topic_slug == topic_slug,
+            TopicSetInfo.exam_type == exam_type_key,
+            TopicSetInfo.subject == subject_key,
+        )
+        .order_by(TopicSetInfo.set_no.desc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No sets found for given topic/exam/subject.",
+        )
+
+    items = [
+        TopicSetOut(
+            set_no=info.set_no,
+            exam_type=info.exam_type,
+            subject=info.subject,
+            topic_slug=info.topic_slug,
+            job_id=str(job.id),
+            job_status=job.status.value,
+            num_questions=job.num_questions,
+            created_at=info.created_at,
+        )
+        for info, job in rows
+    ]
+    return TopicSetListOut(
+        exam_type=exam_type_key,
+        subject=subject_key,
+        topic_slug=topic_slug,
+        total_sets=len(items),
+        sets=items,
     )

@@ -13,6 +13,7 @@ For each question slot the pipeline:
 """
 
 import hashlib
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -22,15 +23,19 @@ from pathlib import Path
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import (
+    ExamBlueprint,
+    ExamSubjectBlueprint,
     JobStatus,
     QuestionPattern,
     TopicGenerationJob,
     TopicQuestionEn,
     TopicQuestionTa,
+    TopicSetInfo,
     TopicSourceChunk,
     TopicSourceKind,
 )
@@ -53,7 +58,107 @@ class BilingualBatch(BaseModel):
     questions: list[BilingualQuestion]
 
 
+DEFAULT_STYLE_HINTS = {
+    "easy": "Direct simple factual or concept questions.",
+    "moderate": "Match-the-following / article-to-concept style with moderate reasoning.",
+    "hard": "Statement-reason / assertion-reason style with tricky distractors.",
+}
+DEFAULT_DIFFICULTY_SPLIT = {"easy": 10, "moderate": 20, "hard": 70}
+TNPSC_FIXED_SUBJECTS = {
+    "general_science",
+    "current_affairs",
+    "geography",
+    "history_and_culture_of_india",
+    "indian_polity",
+    "indian_economy",
+    "indian_national_movement",
+    "aptitude_and_mental_ability",
+    "tamil_language",
+    "english_language",
+}
+
+
 # ── Helpers ──────────────────────────────────────────────────────
+
+
+def _norm(value: str) -> str:
+    return value.strip().lower().replace(" ", "_")
+
+
+def is_valid_subject_for_exam(exam_type: str, subject: str) -> bool:
+    """Validate fixed subject lists for known exams."""
+    subject_key = _norm(subject)
+    if exam_type.upper().startswith("TNPSC"):
+        return subject_key in TNPSC_FIXED_SUBJECTS
+    return True
+
+
+def _difficulty_quota(total: int, easy_pct: int, moderate_pct: int, hard_pct: int) -> dict[str, int]:
+    pcts = {"easy": easy_pct, "moderate": moderate_pct, "hard": hard_pct}
+    total_pct = max(1, sum(pcts.values()))
+    scaled = {k: max(1, int(round(v * 100 / total_pct))) for k, v in pcts.items()}
+    diff = 100 - sum(scaled.values())
+    keys = ["easy", "moderate", "hard"]
+    i = 0
+    while diff != 0:
+        k = keys[i % len(keys)]
+        if diff > 0:
+            scaled[k] += 1
+            diff -= 1
+        elif scaled[k] > 1:
+            scaled[k] -= 1
+            diff += 1
+        i += 1
+
+    out = {k: max(1, math.floor(scaled[k] * total / 100)) for k in keys}
+    q_diff = total - sum(out.values())
+    i = 0
+    while q_diff != 0:
+        k = keys[i % len(keys)]
+        if q_diff > 0:
+            out[k] += 1
+            q_diff -= 1
+        elif out[k] > 1:
+            out[k] -= 1
+            q_diff += 1
+        i += 1
+    return out
+
+
+def _get_or_create_subject_blueprint(db: Session, exam_type: str, subject: str) -> ExamSubjectBlueprint:
+    exam_type_key = exam_type.upper().strip()
+    subject_key = _norm(subject)
+    blueprint = db.query(ExamBlueprint).filter(ExamBlueprint.exam_type == exam_type_key).first()
+    if blueprint is None:
+        blueprint = ExamBlueprint(exam_type=exam_type_key, is_active=True)
+        db.add(blueprint)
+        db.flush()
+
+    row = (
+        db.query(ExamSubjectBlueprint)
+        .filter(
+            ExamSubjectBlueprint.blueprint_id == blueprint.id,
+            ExamSubjectBlueprint.subject == subject_key,
+        )
+        .first()
+    )
+    if row is not None:
+        return row
+
+    # User requested same difficulty interpretation for all listed TNPSC subjects.
+    style = dict(DEFAULT_STYLE_HINTS)
+    row = ExamSubjectBlueprint(
+        blueprint_id=blueprint.id,
+        subject=subject_key,
+        easy_pct=DEFAULT_DIFFICULTY_SPLIT["easy"],
+        moderate_pct=DEFAULT_DIFFICULTY_SPLIT["moderate"],
+        hard_pct=DEFAULT_DIFFICULTY_SPLIT["hard"],
+        style_json=style,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -214,7 +319,13 @@ def _build_context(chunks: list[TopicSourceChunk], max_chars: int = 900) -> str:
 # ── Question generation ──────────────────────────────────────────
 
 def _gen_en_questions(
-    db: Session, topic_slug: str, count: int
+    db: Session,
+    exam_type: str,
+    subject: str,
+    topic_slug: str,
+    difficulty: str,
+    count: int,
+    style_hint: str,
 ) -> list[BilingualQuestion]:
     llm = _llm()
     mat = _retrieve_topic(db, topic_slug, f"{topic_slug} key concepts and facts", TopicSourceKind.MATERIAL_EN, top_k=12)
@@ -232,20 +343,31 @@ def _gen_en_questions(
 
     parser = llm.with_structured_output(BilingualBatch)
     prompt = (
-        f"You are a TNPSC exam setter. Generate exactly {count} fresh MCQ questions "
-        f"on the topic '{topic_slug}' in English. "
+        f"You are an exam setter for {exam_type}. Generate exactly {count} fresh MCQ questions "
+        f"for subject '{subject}', topic '{topic_slug}' in English. "
+        f"Difficulty bucket: {difficulty}. "
+        f"Difficulty behavior: {style_hint} "
         "Rules: 4 options each, answer must be one of the options, "
-        "follow TNPSC exam style shown in PYQ context, "
+        "follow exam style shown in PYQ context, "
         "do NOT copy exact questions from PYQ. "
         "Return JSON only.\n\n"
         f"Context:\n{context}"
     )
     out = parser.invoke(prompt)
-    return out.questions[:count]
+    qs = out.questions[:count]
+    for q in qs:
+        q.difficulty = difficulty
+    return qs
 
 
 def _gen_ta_questions(
-    db: Session, topic_slug: str, en_questions: list[BilingualQuestion]
+    db: Session,
+    exam_type: str,
+    subject: str,
+    topic_slug: str,
+    difficulty: str,
+    style_hint: str,
+    en_questions: list[BilingualQuestion],
 ) -> list[BilingualQuestion]:
     """
     Generate Tamil versions of questions.
@@ -273,10 +395,12 @@ def _gen_ta_questions(
 
     parser = llm.with_structured_output(BilingualBatch)
     prompt = (
-        f"You are a TNPSC exam setter. Convert the following {len(en_questions)} English MCQ questions "
-        f"about '{topic_slug}' to Tamil. "
+        f"You are an exam setter for {exam_type}. Convert the following {len(en_questions)} English MCQ questions "
+        f"for subject '{subject}', topic '{topic_slug}' to Tamil. "
+        f"Difficulty bucket: {difficulty}. "
+        f"Difficulty behavior: {style_hint} "
         "Use the Tamil material context to ensure accurate, natural Tamil phrasing. "
-        "Preserve the same meaning, answer, and TNPSC style. "
+        "Preserve the same meaning, answer, and exam style. "
         "Return exactly the same number of questions as input. "
         "Options must be in Tamil. Answer must be in Tamil matching one of the options. "
         "Return JSON only.\n\n"
@@ -307,6 +431,21 @@ def run_topic_generation_job(db: Session, job_id: uuid.UUID) -> None:
     if job is None:
         return
     try:
+        set_info = db.query(TopicSetInfo).filter(TopicSetInfo.job_id == job.id).first()
+        if set_info is None:
+            raise RuntimeError("Missing topic set metadata for this generation job.")
+        exam_type = set_info.exam_type
+        subject = set_info.subject
+
+        blueprint = _get_or_create_subject_blueprint(db, exam_type, subject)
+        style_json = blueprint.style_json or {}
+        difficulty_split = _difficulty_quota(
+            total=job.num_questions,
+            easy_pct=blueprint.easy_pct,
+            moderate_pct=blueprint.moderate_pct,
+            hard_pct=blueprint.hard_pct,
+        )
+
         job.status = JobStatus.PROCESSING
         job.progress = 5
         job.started_at = datetime.utcnow()
@@ -316,16 +455,49 @@ def run_topic_generation_job(db: Session, job_id: uuid.UUID) -> None:
         ensure_topic_indexed(db, job.topic_slug)
 
         job.progress = 25
-        job.message = "Generating English questions"
+        job.message = "Generating English questions by difficulty"
         db.commit()
 
-        en_questions = _gen_en_questions(db, job.topic_slug, job.num_questions)
+        en_questions: list[BilingualQuestion] = []
+        for difficulty in ("easy", "moderate", "hard"):
+            count = difficulty_split.get(difficulty, 0)
+            if count <= 0:
+                continue
+            en_questions.extend(
+                _gen_en_questions(
+                    db=db,
+                    exam_type=exam_type,
+                    subject=subject,
+                    topic_slug=job.topic_slug,
+                    difficulty=difficulty,
+                    count=count,
+                    style_hint=str(style_json.get(difficulty, DEFAULT_STYLE_HINTS[difficulty])),
+                )
+            )
 
         job.progress = 55
-        job.message = "Generating Tamil questions"
+        job.message = "Generating Tamil questions by difficulty"
         db.commit()
 
-        ta_questions = _gen_ta_questions(db, job.topic_slug, en_questions)
+        ta_questions: list[BilingualQuestion] = []
+        start_idx = 0
+        for difficulty in ("easy", "moderate", "hard"):
+            count = difficulty_split.get(difficulty, 0)
+            if count <= 0:
+                continue
+            en_batch = en_questions[start_idx : start_idx + count]
+            start_idx += count
+            ta_questions.extend(
+                _gen_ta_questions(
+                    db=db,
+                    exam_type=exam_type,
+                    subject=subject,
+                    topic_slug=job.topic_slug,
+                    difficulty=difficulty,
+                    style_hint=str(style_json.get(difficulty, DEFAULT_STYLE_HINTS[difficulty])),
+                    en_questions=en_batch,
+                )
+            )
 
         job.progress = 80
         job.message = "Saving to database"
@@ -370,7 +542,10 @@ def run_topic_generation_job(db: Session, job_id: uuid.UUID) -> None:
 
         job.status = JobStatus.COMPLETED
         job.progress = 100
-        job.message = f"Done. Generated {len(en_questions)} EN + {len(ta_questions)} TA questions."
+        job.message = (
+            f"Done. Set {set_info.set_no}: generated {len(en_questions)} EN + {len(ta_questions)} TA "
+            f"with split {difficulty_split}."
+        )
         job.finished_at = datetime.utcnow()
         db.commit()
 
@@ -390,6 +565,9 @@ def run_topic_generation_job(db: Session, job_id: uuid.UUID) -> None:
 def topic_job_to_dict(job: TopicGenerationJob) -> dict:
     return {
         "job_id": str(job.id),
+        "set_no": None,
+        "exam_type": None,
+        "subject": None,
         "topic_slug": job.topic_slug,
         "num_questions": job.num_questions,
         "status": job.status.value,
@@ -403,7 +581,7 @@ def topic_job_to_dict(job: TopicGenerationJob) -> dict:
 
 
 def topic_questions_to_dict(
-    patterns: list[QuestionPattern], lang: str
+    patterns: list[QuestionPattern], lang: str, set_no: int | None = None, exam_type: str | None = None, subject: str | None = None
 ) -> list[dict]:
     out = []
     for p in sorted(patterns, key=lambda x: x.question_no):
@@ -413,6 +591,9 @@ def topic_questions_to_dict(
         out.append(
             {
                 "question_pattern_id": str(p.id),
+                "set_no": set_no,
+                "exam_type": exam_type,
+                "subject": subject,
                 "question_no": p.question_no,
                 "difficulty": p.difficulty,
                 "language": lang,

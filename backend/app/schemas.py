@@ -95,6 +95,16 @@ class PaperOut(BaseModel):
 # ── Topic-wise bilingual test schemas ───────────────────────────
 
 class GenerateTopicQuestionsIn(BaseModel):
+    exam_type: str = Field(
+        min_length=2,
+        max_length=50,
+        description="Exam family like TNPSC_GROUP1, UPSC_PRELIMS",
+    )
+    subject: str = Field(
+        min_length=2,
+        max_length=100,
+        description="Fixed subject name for the exam, e.g. polity",
+    )
     topic_slug: str = Field(
         min_length=2,
         max_length=100,
@@ -110,6 +120,9 @@ class GenerateTopicQuestionsIn(BaseModel):
 
 class TopicJobQueuedOut(BaseModel):
     job_id: str
+    set_no: int
+    exam_type: str
+    subject: str
     topic_slug: str
     status: str
     message: str
@@ -117,6 +130,9 @@ class TopicJobQueuedOut(BaseModel):
 
 class TopicJobStatusOut(BaseModel):
     job_id: str
+    set_no: int | None = None
+    exam_type: str | None = None
+    subject: str | None = None
     topic_slug: str
     num_questions: int
     status: str
@@ -130,6 +146,9 @@ class TopicJobStatusOut(BaseModel):
 
 class TopicQuestionOut(BaseModel):
     question_pattern_id: str
+    set_no: int | None = None
+    exam_type: str | None = None
+    subject: str | None = None
     question_no: int
     difficulty: str
     language: str
@@ -141,7 +160,29 @@ class TopicQuestionOut(BaseModel):
 
 
 class TopicQuestionsOut(BaseModel):
+    set_no: int | None = None
+    exam_type: str | None = None
+    subject: str | None = None
     topic_slug: str
     language: str
     total: int
     questions: list[TopicQuestionOut]
+
+
+class TopicSetOut(BaseModel):
+    set_no: int
+    exam_type: str
+    subject: str
+    topic_slug: str
+    job_id: str
+    job_status: str
+    num_questions: int
+    created_at: datetime
+
+
+class TopicSetListOut(BaseModel):
+    exam_type: str
+    subject: str
+    topic_slug: str
+    total_sets: int
+    sets: list[TopicSetOut]
