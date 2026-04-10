@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 String apiBaseUrl() {
   const fromEnv = String.fromEnvironment('API_BASE_URL');
   if (fromEnv.isNotEmpty) return fromEnv;
-  if (Platform.isAndroid) return 'http://192.168.1.5:8000';
-  return 'http://192.168.1.5:8000';
+  if (Platform.isAndroid) return 'http://10.60.121.204:8000';
+  return 'http://10.60.121.204:8000';
 }
 
 /// Web OAuth client ID from Google Cloud Console (OAuth 2.0 Web application).
