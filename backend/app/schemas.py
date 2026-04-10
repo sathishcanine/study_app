@@ -170,6 +170,7 @@ class TopicQuestionsOut(BaseModel):
 
 
 class TopicSetOut(BaseModel):
+    id: str
     set_no: int
     exam_type: str
     subject: str
@@ -178,6 +179,10 @@ class TopicSetOut(BaseModel):
     job_status: str
     num_questions: int
     created_at: datetime
+    total_takers: int = 0
+    attempted_by_me: bool = False
+    my_rank: int | None = None
+    my_score: int | None = None
 
 
 class TopicSetListOut(BaseModel):
@@ -186,3 +191,59 @@ class TopicSetListOut(BaseModel):
     topic_slug: str
     total_sets: int
     sets: list[TopicSetOut]
+
+
+class SubjectSetListOut(BaseModel):
+    exam_type: str
+    subject: str
+    total_sets: int
+    sets: list[TopicSetOut]
+
+
+class TopicSetAttemptIn(BaseModel):
+    score: int = Field(ge=0)
+    correct_answers: int = Field(ge=0)
+    total_questions: int = Field(ge=1)
+
+
+class TopicSetAttemptOut(BaseModel):
+    set_id: str
+    user_email: str
+    score: int
+    correct_answers: int
+    total_questions: int
+    rank: int
+    total_takers: int
+    attempted_at: datetime
+
+
+class SetLeaderboardEntry(BaseModel):
+    rank: int
+    email: str
+    username: str
+    score: int
+    correct_answers: int
+    total_questions: int
+    attempted_at: datetime
+
+
+class SetLeaderboardOut(BaseModel):
+    set_id: str
+    exam_type: str
+    subject: str
+    topic_slug: str
+    set_no: int
+    total_takers: int
+    entries: list[SetLeaderboardEntry]
+
+
+class CompletedSetOut(BaseModel):
+    set: TopicSetOut
+    attempted_at: datetime
+
+
+class CompletedSetListOut(BaseModel):
+    exam_type: str
+    subject: str | None = None
+    total_completed: int
+    completed_sets: list[CompletedSetOut]

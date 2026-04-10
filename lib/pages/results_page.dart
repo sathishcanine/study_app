@@ -9,6 +9,9 @@ import 'package:study_app/models/question.dart';
 import 'package:study_app/pages/firebase_services.dart/firestore.dart';
 import 'package:study_app/pages/home_page.dart';
 import 'package:study_app/pages/question_page.dart';
+import 'package:study_app/pages/topic_set_question_page.dart';
+import 'package:study_app/services/auth_storage.dart';
+import 'package:study_app/services/study_api.dart';
 import 'package:study_app/widgets/analysesWidger.dart';
 import 'package:study_app/widgets/correction_widget.dart';
 import 'package:study_app/widgets/score_widget.dart';
@@ -24,12 +27,26 @@ class ResultPage extends StatefulWidget {
     required this.playerSelectedResponses,
     required this.diffiuclty,
     required this.catId,
+    this.replayTopicSlug,
+    this.replaySetNo,
+    this.replaySetId,
+    this.replayExamType,
+    this.replaySubject,
+    this.replayLang,
+    this.replaySubjectName,
   });
 
   final List<String> playerResults;
   final List<Question> questions;
   final String type, email, diffiuclty, catId;
   final List<Map<String, dynamic>> playerSelectedResponses;
+  final String? replayTopicSlug;
+  final int? replaySetNo;
+  final String? replaySetId;
+  final String? replayExamType;
+  final String? replaySubject;
+  final String? replayLang;
+  final String? replaySubjectName;
 
   @override
   State<ResultPage> createState() => _ResultPageState();
@@ -66,17 +83,37 @@ class _ResultPageState extends State<ResultPage> {
     correct = c;
     skipped = sk;
     wrong = w;
-    updateUserDetails(
-      id: widget.email,
-      score: score,
-      questionNumbers: widget.questions.length - skipped,
-      correctAnswers: correct,
-      catName: widget.questions[0].name,
-      questionlength: widget.questions.length,
-      difficulty: widget.diffiuclty,
-      date: DateTime.now(),
-    ).catchError((_) {});
+    if (widget.replaySetId != null) {
+      _submitSetAttempt().catchError((_) {});
+    } else {
+      updateUserDetails(
+        id: widget.email,
+        score: score,
+        questionNumbers: widget.questions.length - skipped,
+        correctAnswers: correct,
+        catName: widget.questions[0].name,
+        questionlength: widget.questions.length,
+        difficulty: widget.diffiuclty,
+        date: DateTime.now(),
+      ).catchError((_) {});
+    }
     _playSound();
+  }
+
+  Future<void> _submitSetAttempt() async {
+    final token = await AuthStorage.getToken();
+    if (token == null || token.isEmpty || widget.replaySetId == null) return;
+    try {
+      await StudyApi().submitTopicSetAttempt(
+        token: token,
+        setId: widget.replaySetId!,
+        score: score,
+        correctAnswers: correct,
+        totalQuestions: totalQuestions,
+      );
+    } catch (_) {
+      // Ignore duplicate/late submissions from repeated navigation.
+    }
   }
 
   Future<void> _playSound() async {
@@ -261,17 +298,35 @@ class _ResultPageState extends State<ResultPage> {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(5),
                   ),
-                  onPressed: () {
+                  onPressed: widget.replaySetId != null ? null : () {
+                    final hasReplaySet = widget.replayTopicSlug != null &&
+                        widget.replaySetNo != null &&
+                        widget.replaySetId != null &&
+                        widget.replayExamType != null &&
+                        widget.replaySubject != null;
                     Navigator.push(
                       context,
                       PageTransition(
-                        child: QuestionPage(
-                          catId: widget.catId,
-                          difficulty: widget.diffiuclty,
-                          questionNumber: widget.questions.length.toString(),
-                          type: widget.type,
-                          email: widget.email,
-                        ),
+                        child: hasReplaySet
+                            ? TopicSetQuestionPage(
+                                email: widget.email,
+                                subjectName: widget.replaySubjectName ??
+                                    widget.questions[0].name,
+                                subjectKey: widget.replaySubject!,
+                                topicSlug: widget.replayTopicSlug!,
+                                setNo: widget.replaySetNo!,
+                                setId: widget.replaySetId!,
+                                examType: widget.replayExamType!,
+                                lang: widget.replayLang ?? 'en',
+                              )
+                            : QuestionPage(
+                                catId: widget.catId,
+                                difficulty: widget.diffiuclty,
+                                questionNumber:
+                                    widget.questions.length.toString(),
+                                type: widget.type,
+                                email: widget.email,
+                              ),
                         type: PageTransitionType.topToBottom,
                         duration: const Duration(milliseconds: 300),
                       ),
@@ -280,9 +335,9 @@ class _ResultPageState extends State<ResultPage> {
                   height: 50,
                   minWidth: double.infinity,
                   color: kPrimaryColor,
-                  child: const Text(
-                    "Play again",
-                    style: TextStyle(
+                  child: Text(
+                    widget.replaySetId != null ? "Attempt Submitted" : "Play again",
+                    style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w500,
                       fontFamily: "Ubuntu",

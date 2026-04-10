@@ -143,4 +143,106 @@ class StudyApi {
     }
     throw StudyApiException(_messageFromResponse(response));
   }
+
+  Future<Map<String, dynamic>> getSubjectSets({
+    required String token,
+    required String examType,
+    required String subject,
+  }) async {
+    final response = await http.get(
+      _u('/subjects/$subject/sets').replace(
+        queryParameters: {
+          'exam_type': examType,
+        },
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getTopicQuestions({
+    required String token,
+    required String topicSlug,
+    required String examType,
+    required String subject,
+    required int setNo,
+    String lang = 'en',
+  }) async {
+    final response = await http.get(
+      _u('/topics/$topicSlug/questions').replace(
+        queryParameters: {
+          'exam_type': examType,
+          'subject': subject,
+          'set_no': setNo.toString(),
+          'lang': lang,
+        },
+      ),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getCompletedTopicSets({
+    required String token,
+    required String examType,
+    String? subject,
+  }) async {
+    final query = <String, String>{'exam_type': examType};
+    if (subject != null && subject.isNotEmpty) {
+      query['subject'] = subject;
+    }
+    final response = await http.get(
+      _u('/users/me/completed-topic-sets').replace(queryParameters: query),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> submitTopicSetAttempt({
+    required String token,
+    required String setId,
+    required int score,
+    required int correctAnswers,
+    required int totalQuestions,
+  }) async {
+    final response = await http.post(
+      _u('/topic-sets/$setId/attempts'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'score': score,
+        'correct_answers': correctAnswers,
+        'total_questions': totalQuestions,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getTopicSetLeaderboard({
+    required String token,
+    required String setId,
+  }) async {
+    final response = await http.get(
+      _u('/topic-sets/$setId/leaderboard'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
 }

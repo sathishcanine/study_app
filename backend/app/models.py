@@ -193,6 +193,28 @@ class TopicSetInfo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class TopicSetAttempt(Base):
+    """
+    One user can submit one attempt per generated topic set.
+    Ranking and set-level leaderboard are derived from this table.
+    """
+
+    __tablename__ = "topic_set_attempts"
+    __table_args__ = (UniqueConstraint("set_info_id", "user_email", name="uq_set_user_attempt"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    set_info_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("topic_set_info.id", ondelete="CASCADE"), index=True
+    )
+    user_email: Mapped[str] = mapped_column(
+        ForeignKey("users.email", ondelete="CASCADE"), index=True
+    )
+    score: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    correct_answers: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    total_questions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+
+
 class ExamBlueprint(Base):
     """Per-exam configuration root (TNPSC / UPSC / etc)."""
 

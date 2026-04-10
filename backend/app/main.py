@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -21,10 +21,13 @@ from app.models import (
     QuestionPaper,
     QuestionPattern,
     TopicGenerationJob,
+    TopicSetAttempt,
     TopicSetInfo,
     User,
 )
 from app.schemas import (
+    CompletedSetListOut,
+    CompletedSetOut,
     GeneratePaperIn,
     GenerateTopicQuestionsIn,
     GoogleAuthIn,
@@ -33,9 +36,14 @@ from app.schemas import (
     LeaderboardEntry,
     PaperOut,
     QuizResultIn,
+    SetLeaderboardEntry,
+    SetLeaderboardOut,
     TokenResponse,
+    TopicSetAttemptIn,
+    TopicSetAttemptOut,
     TopicJobQueuedOut,
     TopicJobStatusOut,
+    SubjectSetListOut,
     TopicSetListOut,
     TopicSetOut,
     TopicQuestionsOut,
@@ -114,6 +122,34 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 
+def exam_type_match(column, exam_type_raw: str):
+    """
+    Match exact exam type, and for family keys like TNPSC include TNPSC_* variants.
+    Example: TNPSC matches TNPSC and TNPSC_GROUP1.
+    """
+    exam_type_key = exam_type_raw.upper().strip()
+    if "_" in exam_type_key:
+        return column == exam_type_key
+    return or_(column == exam_type_key, column.like(f"{exam_type_key}_%"))
+
+
+def _build_set_ranks(attempts: list[TopicSetAttempt]) -> tuple[dict[str, int], int]:
+    """
+    Dense rank by score desc, then attempted_at asc.
+    Returns (email -> rank, total_takers).
+    """
+    ordered = sorted(attempts, key=lambda a: (-a.score, a.attempted_at))
+    ranks: dict[str, int] = {}
+    rank = 0
+    prev_score: int | None = None
+    for i, a in enumerate(ordered):
+        if prev_score is None or a.score != prev_score:
+            rank = i + 1
+            prev_score = a.score
+        ranks[a.user_email] = rank
+    return ranks, len(ordered)
+
+
 @app.post("/auth/register", response_model=TokenResponse)
 def register(body: UserRegister, db: Session = Depends(get_db)):
     if get_user_by_email(db, body.email):
@@ -188,22 +224,12 @@ def record_quiz_result(
 ):
     user = get_user_by_email(db, email)
     assert user is not None
-    hist = list(user.history) if user.history else []
-    hist.append(
-        {
-            "catName": body.cat_name,
-            "correctQuestions": body.correct_answers,
-            "difficulty": body.difficulty,
-            "earnedPoints": body.score,
-            "questionNumbers": body.question_length,
-            "date": body.date.isoformat(),
-        }
-    )
+    # Keep only aggregate counters in users table; per-test details belong to dedicated attempt tables.
     user.score = user.score + body.score
     user.total_questions = user.total_questions + body.question_numbers
     user.quiz_taken = user.quiz_taken + 1
     user.correct_answer = user.correct_answer + body.correct_answers
-    user.history = hist
+    user.history = []
     db.commit()
     return user_profile_dict(user)
 
@@ -450,7 +476,7 @@ def get_topic_questions(
         db.query(TopicSetInfo)
         .filter(
             TopicSetInfo.topic_slug == topic_slug,
-            TopicSetInfo.exam_type == exam_type.upper().strip(),
+            exam_type_match(TopicSetInfo.exam_type, exam_type),
             TopicSetInfo.subject == subject_key,
             TopicSetInfo.set_no == set_no,
         )
@@ -506,7 +532,7 @@ def get_topic_sets(
         .join(TopicGenerationJob, TopicGenerationJob.id == TopicSetInfo.job_id)
         .filter(
             TopicSetInfo.topic_slug == topic_slug,
-            TopicSetInfo.exam_type == exam_type_key,
+            exam_type_match(TopicSetInfo.exam_type, exam_type),
             TopicSetInfo.subject == subject_key,
         )
         .order_by(TopicSetInfo.set_no.desc())
@@ -518,23 +544,261 @@ def get_topic_sets(
             detail="No sets found for given topic/exam/subject.",
         )
 
-    items = [
-        TopicSetOut(
-            set_no=info.set_no,
-            exam_type=info.exam_type,
-            subject=info.subject,
-            topic_slug=info.topic_slug,
-            job_id=str(job.id),
-            job_status=job.status.value,
-            num_questions=job.num_questions,
-            created_at=info.created_at,
+    me_email = _
+    items: list[TopicSetOut] = []
+    for info, job in rows:
+        attempts = (
+            db.query(TopicSetAttempt)
+            .filter(TopicSetAttempt.set_info_id == info.id)
+            .all()
         )
-        for info, job in rows
-    ]
+        rank_map, takers = _build_set_ranks(attempts)
+        my_attempt = next((a for a in attempts if a.user_email == me_email), None)
+        items.append(
+            TopicSetOut(
+                id=str(info.id),
+                set_no=info.set_no,
+                exam_type=info.exam_type,
+                subject=info.subject,
+                topic_slug=info.topic_slug,
+                job_id=str(job.id),
+                job_status=job.status.value,
+                num_questions=job.num_questions,
+                created_at=info.created_at,
+                total_takers=takers,
+                attempted_by_me=my_attempt is not None,
+                my_rank=rank_map.get(me_email),
+                my_score=my_attempt.score if my_attempt else None,
+            )
+        )
     return TopicSetListOut(
         exam_type=exam_type_key,
         subject=subject_key,
         topic_slug=topic_slug,
         total_sets=len(items),
         sets=items,
+    )
+
+
+@app.get("/subjects/{subject}/sets", response_model=SubjectSetListOut)
+def get_subject_sets(
+    subject: str,
+    exam_type: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    """List all generated sets for a subject across topic slugs."""
+    exam_type_key = exam_type.upper().strip()
+    subject_key = subject.strip().lower().replace(" ", "_")
+
+    rows = (
+        db.query(TopicSetInfo, TopicGenerationJob)
+        .join(TopicGenerationJob, TopicGenerationJob.id == TopicSetInfo.job_id)
+        .filter(
+            exam_type_match(TopicSetInfo.exam_type, exam_type),
+            TopicSetInfo.subject == subject_key,
+        )
+        .order_by(TopicSetInfo.created_at.desc(), TopicSetInfo.set_no.desc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No sets found for given exam/subject.",
+        )
+
+    me_email = _
+    items: list[TopicSetOut] = []
+    for info, job in rows:
+        attempts = (
+            db.query(TopicSetAttempt)
+            .filter(TopicSetAttempt.set_info_id == info.id)
+            .all()
+        )
+        rank_map, takers = _build_set_ranks(attempts)
+        my_attempt = next((a for a in attempts if a.user_email == me_email), None)
+        items.append(
+            TopicSetOut(
+                id=str(info.id),
+                set_no=info.set_no,
+                exam_type=info.exam_type,
+                subject=info.subject,
+                topic_slug=info.topic_slug,
+                job_id=str(job.id),
+                job_status=job.status.value,
+                num_questions=job.num_questions,
+                created_at=info.created_at,
+                total_takers=takers,
+                attempted_by_me=my_attempt is not None,
+                my_rank=rank_map.get(me_email),
+                my_score=my_attempt.score if my_attempt else None,
+            )
+        )
+    return SubjectSetListOut(
+        exam_type=exam_type_key,
+        subject=subject_key,
+        total_sets=len(items),
+        sets=items,
+    )
+
+
+@app.post("/topic-sets/{set_id}/attempts", response_model=TopicSetAttemptOut)
+def submit_topic_set_attempt(
+    set_id: str,
+    body: TopicSetAttemptIn,
+    db: Session = Depends(get_db),
+    email: str = Depends(get_current_user_email),
+):
+    """Submit one attempt for a set. A user can attempt a set only once."""
+    try:
+        sid = uuid.UUID(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid set_id") from exc
+
+    set_info = db.query(TopicSetInfo).filter(TopicSetInfo.id == sid).first()
+    if not set_info:
+        raise HTTPException(status_code=404, detail="Set not found")
+
+    existing = (
+        db.query(TopicSetAttempt)
+        .filter(
+            TopicSetAttempt.set_info_id == sid,
+            TopicSetAttempt.user_email == email,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="You have already attempted this set.")
+
+    attempt = TopicSetAttempt(
+        set_info_id=sid,
+        user_email=email,
+        score=body.score,
+        correct_answers=body.correct_answers,
+        total_questions=body.total_questions,
+    )
+    db.add(attempt)
+    db.commit()
+    db.refresh(attempt)
+
+    attempts = db.query(TopicSetAttempt).filter(TopicSetAttempt.set_info_id == sid).all()
+    rank_map, takers = _build_set_ranks(attempts)
+    return TopicSetAttemptOut(
+        set_id=set_id,
+        user_email=email,
+        score=attempt.score,
+        correct_answers=attempt.correct_answers,
+        total_questions=attempt.total_questions,
+        rank=rank_map[email],
+        total_takers=takers,
+        attempted_at=attempt.attempted_at,
+    )
+
+
+@app.get("/topic-sets/{set_id}/leaderboard", response_model=SetLeaderboardOut)
+def get_topic_set_leaderboard(
+    set_id: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    """Leaderboard for a specific set."""
+    try:
+        sid = uuid.UUID(set_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid set_id") from exc
+
+    set_info = db.query(TopicSetInfo).filter(TopicSetInfo.id == sid).first()
+    if not set_info:
+        raise HTTPException(status_code=404, detail="Set not found")
+
+    attempts = db.query(TopicSetAttempt).filter(TopicSetAttempt.set_info_id == sid).all()
+    rank_map, takers = _build_set_ranks(attempts)
+
+    users = {u.email: u.username for u in db.query(User).all()}
+    ordered = sorted(attempts, key=lambda a: (-a.score, a.attempted_at))
+    entries = [
+        SetLeaderboardEntry(
+            rank=rank_map[a.user_email],
+            email=a.user_email,
+            username=users.get(a.user_email, a.user_email.split("@", 1)[0]),
+            score=a.score,
+            correct_answers=a.correct_answers,
+            total_questions=a.total_questions,
+            attempted_at=a.attempted_at,
+        )
+        for a in ordered
+    ]
+
+    return SetLeaderboardOut(
+        set_id=set_id,
+        exam_type=set_info.exam_type,
+        subject=set_info.subject,
+        topic_slug=set_info.topic_slug,
+        set_no=set_info.set_no,
+        total_takers=takers,
+        entries=entries,
+    )
+
+
+@app.get("/users/me/completed-topic-sets", response_model=CompletedSetListOut)
+def get_my_completed_topic_sets(
+    exam_type: str,
+    subject: str | None = None,
+    db: Session = Depends(get_db),
+    email: str = Depends(get_current_user_email),
+):
+    """
+    Completed sets for current user (for frontend Completed tab),
+    including current rank and total takers per set.
+    """
+    attempts_q = db.query(TopicSetAttempt).filter(TopicSetAttempt.user_email == email)
+    if subject:
+        subject_key = subject.strip().lower().replace(" ", "_")
+        attempts_q = attempts_q.join(TopicSetInfo, TopicSetInfo.id == TopicSetAttempt.set_info_id).filter(
+            TopicSetInfo.subject == subject_key
+        )
+    mine = attempts_q.order_by(TopicSetAttempt.attempted_at.desc()).all()
+
+    exam_type_key = exam_type.upper().strip()
+    out: list[CompletedSetOut] = []
+    for a in mine:
+        info = db.query(TopicSetInfo).filter(TopicSetInfo.id == a.set_info_id).first()
+        if info is None:
+            continue
+        if "_" in exam_type_key:
+            if info.exam_type != exam_type_key:
+                continue
+        elif not (info.exam_type == exam_type_key or info.exam_type.startswith(f"{exam_type_key}_")):
+            continue
+        job = db.query(TopicGenerationJob).filter(TopicGenerationJob.id == info.job_id).first()
+        if job is None:
+            continue
+        set_attempts = db.query(TopicSetAttempt).filter(TopicSetAttempt.set_info_id == info.id).all()
+        rank_map, takers = _build_set_ranks(set_attempts)
+        out.append(
+            CompletedSetOut(
+                attempted_at=a.attempted_at,
+                set=TopicSetOut(
+                    id=str(info.id),
+                    set_no=info.set_no,
+                    exam_type=info.exam_type,
+                    subject=info.subject,
+                    topic_slug=info.topic_slug,
+                    job_id=str(job.id),
+                    job_status=job.status.value,
+                    num_questions=job.num_questions,
+                    created_at=info.created_at,
+                    total_takers=takers,
+                    attempted_by_me=True,
+                    my_rank=rank_map.get(email),
+                    my_score=a.score,
+                ),
+            )
+        )
+
+    return CompletedSetListOut(
+        exam_type=exam_type_key,
+        subject=subject.strip().lower().replace(" ", "_") if subject else None,
+        total_completed=len(out),
+        completed_sets=out,
     )

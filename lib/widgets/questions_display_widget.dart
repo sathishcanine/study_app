@@ -25,12 +25,26 @@ class QuestionUi extends StatefulWidget {
     required this.catId,
     required this.difficulty,
     required this.questionNumber,
+    this.replayTopicSlug,
+    this.replaySetNo,
+    this.replaySetId,
+    this.replayExamType,
+    this.replaySubject,
+    this.replayLang,
+    this.replaySubjectName,
   });
 
   final CountDownController controller;
   final List<Question> questions;
   final int questionsNumber;
   final String type, email, catId, questionNumber, difficulty;
+  final String? replayTopicSlug;
+  final int? replaySetNo;
+  final String? replaySetId;
+  final String? replayExamType;
+  final String? replaySubject;
+  final String? replayLang;
+  final String? replaySubjectName;
 
   @override
   State<QuestionUi> createState() => _QuestionUiState();
@@ -200,6 +214,13 @@ class _QuestionUiState extends State<QuestionUi> {
                                         questions: widget.questions,
                                         type: widget.type,
                                         catId: widget.catId,
+                                        replayTopicSlug: widget.replayTopicSlug,
+                                        replaySetNo: widget.replaySetNo,
+                                        replaySetId: widget.replaySetId,
+                                        replayExamType: widget.replayExamType,
+                                        replaySubject: widget.replaySubject,
+                                        replayLang: widget.replayLang,
+                                        replaySubjectName: widget.replaySubjectName,
                                       ),
                                     ),
                                   );
@@ -307,6 +328,13 @@ class _QuestionUiState extends State<QuestionUi> {
                             questions: widget.questions,
                             type: widget.type,
                             catId: widget.catId,
+                            replayTopicSlug: widget.replayTopicSlug,
+                            replaySetNo: widget.replaySetNo,
+                            replaySetId: widget.replaySetId,
+                            replayExamType: widget.replayExamType,
+                            replaySubject: widget.replaySubject,
+                            replayLang: widget.replayLang,
+                            replaySubjectName: widget.replaySubjectName,
                           ),
                         ),
                       );

@@ -92,62 +92,62 @@ class CategoriesData {
   List<Map<String, dynamic>> otherList = [
     {
       "id": 9,
-      "name": "General Knowledge",
-      "total_questions": 4603,
+      "name": "General Science",
+      "total_questions": 0,
       "image": "assets/icons/brain.png"
     },
     {
       "id": 20,
-      "name": "Mythology",
-      "total_questions": 169,
+      "name": "Current Affairs",
+      "total_questions": 0,
       "image": "assets/icons/temple.png"
     },
     {
       "id": 21,
-      "name": "Sports",
-      "total_questions": 734,
+      "name": "Geography",
+      "total_questions": 0,
       "image": "assets/icons/sports.png"
     },
     {
       "id": 22,
-      "name": "Geography",
-      "total_questions": 780,
+      "name": "History and Culture of India",
+      "total_questions": 0,
       "image": "assets/icons/geography.png"
     },
     {
       "id": 23,
-      "name": "History",
-      "total_questions": 894,
+      "name": "Indian Polity",
+      "total_questions": 0,
       "image": "assets/icons/parchment.png"
     },
     {
       "id": 24,
-      "name": "Politics",
-      "total_questions": 244,
+      "name": "Indian Economy",
+      "total_questions": 0,
       "image": "assets/icons/politics.png"
     },
     {
       "id": 25,
-      "name": "Art",
-      "total_questions": 189,
+      "name": "Indian National Movement",
+      "total_questions": 0,
       "image": "assets/icons/palette.png"
     },
     {
       "id": 26,
-      "name": "Celebrities",
-      "total_questions": 231,
+      "name": "Aptitude and Mental Ability",
+      "total_questions": 0,
       "image": "assets/icons/fame.png"
     },
     {
       "id": 27,
-      "name": "Animals",
-      "total_questions": 318,
+      "name": "Tamil Language",
+      "total_questions": 0,
       "image": "assets/icons/paw.png"
     },
     {
       "id": 28,
-      "name": "Vehicles",
-      "total_questions": 280,
+      "name": "English Language",
+      "total_questions": 0,
       "image": "assets/icons/fleet.png"
     }
   ];
