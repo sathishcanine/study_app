@@ -245,4 +245,61 @@ class StudyApi {
     }
     throw StudyApiException(_messageFromResponse(response));
   }
+
+  Future<Map<String, dynamic>> getPyqSubjects({
+    required String token,
+  }) async {
+    final response = await http.get(
+      _u('/pyq/subjects'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getPyqFilters({
+    required String token,
+    required String subjectSlug,
+  }) async {
+    final response = await http.get(
+      _u('/pyq/subjects/$subjectSlug/filters'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
+
+  Future<Map<String, dynamic>> getPyqQuestions({
+    required String token,
+    required String subjectSlug,
+    int? year,
+    /// Filters DB `topic` column (alias query param `subtopic` still accepted by API).
+    String? topic,
+    String? subtopic,
+    int page = 1,
+    int limit = 20,
+    /// `auto` (default): prefer OpenAI-cleaned rows when any exist, else all (legacy OCR).
+    String? source,
+  }) async {
+    final query = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+    };
+    if (year != null) query['year'] = year.toString();
+    final t = (topic != null && topic.isNotEmpty) ? topic : subtopic;
+    if (t != null && t.isNotEmpty) query['topic'] = t;
+    if (source != null && source.isNotEmpty) query['source'] = source;
+    final response = await http.get(
+      _u('/pyq/subjects/$subjectSlug/questions').replace(queryParameters: query),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw StudyApiException(_messageFromResponse(response));
+  }
 }

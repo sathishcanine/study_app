@@ -1,11 +1,13 @@
 import secrets
 import uuid
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.responses import Response
 from sqlalchemy import func, or_, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -13,11 +15,16 @@ from sqlalchemy.orm import Session
 from app.auth_utils import create_access_token, decode_token, get_user_by_email, hash_password, verify_password
 from app.config import settings
 from app.database import Base, SessionLocal, engine, get_db
+from app.pyq_schema_migration import ensure_pyq_question_schema
 from app.generate_pipeline import run_generation_job, to_job_status, to_paper_out
 from app.google_verify import verify_google_id_token
 from app.models import (
     GenerationJob,
     JobStatus,
+    PyqDocument,
+    PyqIngestStatus,
+    PyqQuestion,
+    PyqSubject,
     QuestionPaper,
     QuestionPattern,
     TopicGenerationJob,
@@ -35,6 +42,13 @@ from app.schemas import (
     JobStatusOut,
     LeaderboardEntry,
     PaperOut,
+    PyqFiltersOut,
+    PyqImportJsonIn,
+    PyqPasteTextIn,
+    PyqQuestionOut,
+    PyqQuestionPageOut,
+    PyqSubjectListOut,
+    PyqSubjectOut,
     QuizResultIn,
     SetLeaderboardEntry,
     SetLeaderboardOut,
@@ -50,6 +64,13 @@ from app.schemas import (
     UserLogin,
     UserRegister,
 )
+from app.pyq_pipeline import (
+    import_pyq_manual_json,
+    ingest_pasted_text_with_openai,
+    ingest_previous_year_documents,
+    ingest_subject_with_openai,
+    sync_pyq_catalog_from_files,
+)
 from app.topic_pipeline import (
     is_valid_subject_for_exam,
     run_topic_generation_job,
@@ -58,6 +79,7 @@ from app.topic_pipeline import (
 )
 
 security = HTTPBearer(auto_error=False)
+logger = logging.getLogger("uvicorn.error")
 
 
 def user_profile_dict(user: User) -> dict:
@@ -89,6 +111,26 @@ async def lifespan(_: FastAPI):
             ) from exc
         raise
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        ensure_pyq_question_schema(conn)
+    # One-time PYQ sync + ingest per server start (not request-time).
+    s = SessionLocal()
+    try:
+        logger.info("PYQ startup catalog sync started")
+        sync_summary = sync_pyq_catalog_from_files(s)
+        logger.info("PYQ startup catalog sync done: %s", sync_summary)
+        if settings.pyq_run_startup_ingest:
+            startup_slug = (settings.pyq_startup_subject_slug or "").strip().lower() or None
+            logger.info("PYQ startup ingest started (filter=%s)", startup_slug or "all")
+            ingest_summary = ingest_previous_year_documents(s, subject_slug_filter=startup_slug)
+            logger.info("PYQ startup ingest done: %s", ingest_summary)
+        else:
+            logger.info(
+                "PYQ startup ingest skipped (pyq_run_startup_ingest=false). "
+                "Use POST /admin/pyq/ingest or POST /admin/pyq/ingest-openai when needed."
+            )
+    finally:
+        s.close()
     yield
 
 
@@ -240,9 +282,245 @@ def leaderboard(db: Session = Depends(get_db)):
     return [LeaderboardEntry(username=u.username, score=u.score) for u in rows]
 
 
+@app.get("/")
+def root():
+    """Human-friendly landing when opening the server URL in a browser."""
+    return {
+        "service": app.title,
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+        "health": "/health",
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.post("/admin/pyq/ingest", dependencies=[Depends(require_admin)])
+def ingest_pyq(subject_slug: str | None = None, db: Session = Depends(get_db)):
+    slug = (subject_slug or "").strip().lower() or None
+    return ingest_previous_year_documents(db, subject_slug_filter=slug)
+
+
+@app.post("/admin/pyq/ingest-openai", dependencies=[Depends(require_admin)])
+def ingest_pyq_openai(
+    subject_slug: str,
+    max_questions: int = 450,
+    db: Session = Depends(get_db),
+):
+    return ingest_subject_with_openai(db, subject_slug=subject_slug, max_questions=max_questions)
+
+
+@app.post("/admin/pyq/reingest-openai", dependencies=[Depends(require_admin)])
+def reingest_pyq_openai(
+    subject_slug: str,
+    max_questions: int = 450,
+    db: Session = Depends(get_db),
+):
+    """
+    Clears all stored questions for the subject, resets document ingest flags, then runs OpenAI PDF ingest.
+    Same end state as `scripts/clear_and_ingest_chemistry_pyq.py` for the given slug.
+    """
+    key = (subject_slug or "").strip().lower()
+    if not key:
+        raise HTTPException(status_code=400, detail="subject_slug is required")
+    subject = db.query(PyqSubject).filter(PyqSubject.subject_slug == key).first()
+    if subject is None:
+        raise HTTPException(status_code=404, detail="PYQ subject not found")
+    deleted = db.query(PyqQuestion).filter(PyqQuestion.subject_id == subject.id).delete(synchronize_session=False)
+    for doc in db.query(PyqDocument).filter(PyqDocument.subject_id == subject.id).all():
+        doc.total_questions = 0
+        doc.status = PyqIngestStatus.PENDING
+    db.commit()
+    summary = ingest_subject_with_openai(db, subject_slug=key, max_questions=max_questions)
+    summary["prior_questions_deleted"] = deleted
+    return summary
+
+
+@app.post("/admin/pyq/import-json", dependencies=[Depends(require_admin)])
+def pyq_import_json(body: PyqImportJsonIn, db: Session = Depends(get_db)):
+    """Insert questions from JSON (e.g. typed from ChatGPT). Does not call OpenAI."""
+    return import_pyq_manual_json(
+        db,
+        subject_slug=body.subject_slug,
+        rows=body.questions,
+        replace_subject_questions=body.replace_subject_questions,
+    )
+
+
+@app.post("/admin/pyq/ingest-paste", dependencies=[Depends(require_admin)])
+def pyq_ingest_paste(body: PyqPasteTextIn, db: Session = Depends(get_db)):
+    """Parse pasted question text with OpenAI structured output, then insert rows."""
+    return ingest_pasted_text_with_openai(
+        db,
+        subject_slug=body.subject_slug,
+        raw_text=body.raw_text,
+        append=body.append,
+        max_questions=body.max_questions,
+    )
+
+
+@app.get("/pyq/subjects", response_model=PyqSubjectListOut)
+def get_pyq_subjects(
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    sync_pyq_catalog_from_files(db)
+    subjects = db.query(PyqSubject).filter(PyqSubject.is_active.is_(True)).order_by(PyqSubject.subject_name.asc()).all()
+    items: list[PyqSubjectOut] = []
+    for s in subjects:
+        total_questions = (
+            db.query(func.count(PyqQuestion.id))
+            .filter(PyqQuestion.subject_id == s.id)
+            .scalar()
+            or 0
+        )
+        total_documents = (
+            db.query(func.count(PyqDocument.id))
+            .filter(PyqDocument.subject_id == s.id)
+            .scalar()
+            or 0
+        )
+        items.append(
+            PyqSubjectOut(
+                subject_slug=s.subject_slug,
+                subject_name=s.subject_name,
+                total_questions=int(total_questions),
+                total_documents=int(total_documents),
+            )
+        )
+    return PyqSubjectListOut(total_subjects=len(items), subjects=items)
+
+
+@app.get("/pyq/subjects/{subject_slug}/filters", response_model=PyqFiltersOut)
+def get_pyq_filters(
+    subject_slug: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    subject = db.query(PyqSubject).filter(PyqSubject.subject_slug == subject_slug).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="PYQ subject not found")
+
+    years = sorted(
+        {int(y) for (y,) in db.query(PyqQuestion.year).filter(PyqQuestion.subject_id == subject.id).all() if y is not None},
+        reverse=True,
+    )
+    topic_vals = sorted(
+        {
+            st.strip()
+            for (st,) in db.query(PyqQuestion.topic).filter(PyqQuestion.subject_id == subject.id).all()
+            if st and st.strip()
+        }
+    )
+    return PyqFiltersOut(subject_slug=subject_slug, years=years, topics=topic_vals, subtopics=topic_vals)
+
+
+@app.get("/pyq/subjects/{subject_slug}/questions", response_model=PyqQuestionPageOut)
+def get_pyq_questions(
+    subject_slug: str,
+    year: int | None = None,
+    subtopic: str | None = None,
+    topic: str | None = None,
+    page: int = 1,
+    limit: int = 20,
+    source: str | None = None,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user_email),
+):
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+
+    subject = db.query(PyqSubject).filter(PyqSubject.subject_slug == subject_slug).first()
+    if not subject:
+        raise HTTPException(status_code=404, detail="PYQ subject not found")
+
+    meta_src = func.coalesce(PyqQuestion.raw_meta_json["source"].astext, "")
+    openai_any = (
+        db.query(func.count(PyqQuestion.id))
+        .filter(PyqQuestion.subject_id == subject.id, meta_src.like("%openai%"))
+        .scalar()
+        or 0
+    )
+    src_mode = (source or "").strip().lower()
+    if not src_mode or src_mode == "auto":
+        src_mode = "openai" if int(openai_any) > 0 else "all"
+    if src_mode not in ("all", "openai", "legacy"):
+        raise HTTPException(
+            status_code=400,
+            detail="source must be one of: all, openai, legacy, auto (default auto)",
+        )
+
+    q = db.query(PyqQuestion).filter(PyqQuestion.subject_id == subject.id)
+    if year is not None:
+        q = q.filter(PyqQuestion.year == year)
+    topic_filter = (topic or subtopic or "").strip()
+    if topic_filter:
+        q = q.filter(PyqQuestion.topic == topic_filter)
+    if src_mode == "openai":
+        q = q.filter(meta_src.like("%openai%"))
+    elif src_mode == "legacy":
+        q = q.filter(~meta_src.like("%openai%"))
+
+    total = q.count()
+    rows = (
+        q.order_by(PyqQuestion.year.desc().nullslast(), PyqQuestion.question_no.asc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    questions: list[PyqQuestionOut] = []
+    for row in rows:
+        meta = row.raw_meta_json if isinstance(row.raw_meta_json, dict) else {}
+        legacy_full = (meta.get("answer_full") or meta.get("correct_answer") or "").strip()
+        ca = (row.correct_answer or "").strip()
+        answer_display = ca or legacy_full or (row.answer_key or "").strip()
+        oen = list(row.options_en or [])
+        ota = list(row.options_ta or [])
+        qen = (row.question_en or "").strip()
+        qta = (row.question_ta or "").strip()
+        expl = (row.explanation or "").strip() or (row.explanation_bilingual or "").strip()
+        exv = (row.exam or "").strip() or None
+        top = (row.topic or "").strip() or None
+        questions.append(
+            PyqQuestionOut(
+                id=str(row.id),
+                question_no=row.question_no,
+                question_en=qen,
+                question_ta=qta,
+                options_en=oen,
+                options_ta=ota,
+                correct_answer=ca or legacy_full,
+                explanation=expl,
+                exam=exv,
+                year=row.year,
+                topic=top,
+                question_text_bilingual=row.question_text_bilingual,
+                options=list(row.options_json or []),
+                answer_key=row.answer_key,
+                answer_display=answer_display,
+                explanation_bilingual=row.explanation_bilingual,
+                subtopic=top,
+                exam_name=exv,
+                content_source=meta.get("source") if isinstance(meta.get("source"), str) else None,
+            )
+        )
+    return PyqQuestionPageOut(
+        subject_slug=subject_slug,
+        total=total,
+        page=page,
+        limit=limit,
+        questions=questions,
+    )
 
 
 @app.post("/generate-paper", response_model=JobQueuedOut, dependencies=[Depends(require_admin)])

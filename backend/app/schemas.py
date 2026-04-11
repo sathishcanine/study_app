@@ -247,3 +247,95 @@ class CompletedSetListOut(BaseModel):
     subject: str | None = None
     total_completed: int
     completed_sets: list[CompletedSetOut]
+
+
+class PyqSubjectOut(BaseModel):
+    subject_slug: str
+    subject_name: str
+    total_questions: int
+    total_documents: int
+
+
+class PyqSubjectListOut(BaseModel):
+    total_subjects: int
+    subjects: list[PyqSubjectOut]
+
+
+class PyqFiltersOut(BaseModel):
+    subject_slug: str
+    years: list[int]
+    topics: list[str] = Field(description="Distinct `topic` values from questions.")
+    subtopics: list[str] = Field(
+        default_factory=list,
+        description="Same list as topics; kept for older clients.",
+    )
+
+
+class PyqQuestionOut(BaseModel):
+    id: str
+    question_no: int
+    question_en: str = ""
+    question_ta: str = ""
+    options_en: list[str] = Field(default_factory=list)
+    options_ta: list[str] = Field(default_factory=list)
+    correct_answer: str = ""
+    explanation: str = ""
+    exam: str | None = None
+    year: int | None = None
+    topic: str | None = None
+    question_text_bilingual: str
+    options: list[str]
+    answer_key: str
+    answer_display: str = Field(
+        default="",
+        description="Same as correct_answer when set; else legacy short key.",
+    )
+    explanation_bilingual: str
+    subtopic: str | None = Field(default=None, description="Alias of topic for older clients.")
+    exam_name: str | None = Field(default=None, description="Alias of exam for older clients.")
+    content_source: str | None = Field(
+        default=None,
+        description="openai_* or legacy ocr/pypdf from raw_meta_json when present.",
+    )
+
+
+class PyqQuestionPageOut(BaseModel):
+    subject_slug: str
+    total: int
+    page: int
+    limit: int
+    questions: list[PyqQuestionOut]
+
+
+class PyqManualQuestionIn(BaseModel):
+    """One MCQ row for POST /admin/pyq/import-json (typed from ChatGPT or a spreadsheet)."""
+
+    question_text: str = Field(..., min_length=1)
+    question_en: str | None = None
+    question_ta: str | None = None
+    options: list[str] = Field(..., min_length=2)
+    options_en: list[str] | None = None
+    options_ta: list[str] | None = None
+    answer: str = Field(..., min_length=1)
+    year: int | None = None
+    topic: str | None = None
+    subtopic: str | None = None
+    exam: str | None = None
+    exam_name: str | None = None
+    explanation: str = ""
+
+
+class PyqImportJsonIn(BaseModel):
+    subject_slug: str = Field(..., min_length=1)
+    replace_subject_questions: bool = Field(
+        default=False,
+        description="If true, deletes all existing PYQ rows for this subject before insert.",
+    )
+    questions: list[PyqManualQuestionIn] = Field(..., min_length=1)
+
+
+class PyqPasteTextIn(BaseModel):
+    subject_slug: str = Field(..., min_length=1)
+    raw_text: str = Field(..., min_length=20)
+    append: bool = Field(default=True, description="If false, clears subject questions first.")
+    max_questions: int = Field(default=40, ge=1, le=500)

@@ -300,3 +300,71 @@ class TopicQuestionTa(Base):
     marks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
     pattern: Mapped["QuestionPattern"] = relationship("QuestionPattern", back_populates="ta_question")
+
+
+class PyqIngestStatus(str, enum.Enum):
+    PENDING = "pending"
+    INGESTED = "ingested"
+    FAILED = "failed"
+
+
+class PyqSubject(Base):
+    __tablename__ = "pyq_subjects"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    subject_slug: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    subject_name: Mapped[str] = mapped_column(String(150))
+    icon: Mapped[str] = mapped_column(String(100), default="menu_book", server_default="menu_book")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PyqDocument(Base):
+    __tablename__ = "pyq_documents"
+    __table_args__ = (UniqueConstraint("file_path", name="uq_pyq_file_path"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pyq_subjects.id", ondelete="CASCADE"), index=True)
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_path: Mapped[str] = mapped_column(Text)
+    year_from: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    year_to: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    checksum: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[PyqIngestStatus] = mapped_column(Enum(PyqIngestStatus), default=PyqIngestStatus.PENDING, index=True)
+    total_questions: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class PyqQuestion(Base):
+    __tablename__ = "pyq_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pyq_documents.id", ondelete="CASCADE"), index=True
+    )
+    subject_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pyq_subjects.id", ondelete="CASCADE"), index=True
+    )
+    question_no: Mapped[int] = mapped_column(Integer, index=True)
+    # Canonical bilingual fields (TNPSC PYQ JSON shape)
+    question_en: Mapped[str] = mapped_column(Text, default="", server_default="")
+    question_ta: Mapped[str] = mapped_column(Text, default="", server_default="")
+    options_en: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    options_ta: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    correct_answer: Mapped[str] = mapped_column(Text, default="", server_default="")
+    explanation: Mapped[str] = mapped_column(Text, default="", server_default="")
+    year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    topic: Mapped[str | None] = mapped_column(String(150), nullable=True, index=True)
+    exam: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Legacy / combined display (filled on write for older clients)
+    question_text_bilingual: Mapped[str] = mapped_column(Text)
+    options_json: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    answer_key: Mapped[str] = mapped_column(String(30), default="", server_default="")
+    explanation_bilingual: Mapped[str] = mapped_column(Text, default="", server_default="")
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parse_confidence: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    raw_meta_json: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

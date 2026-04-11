@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     previous_year_dir: str = "data/previous_year"
     materials_dir: str = "data/materials"
     current_affairs_dir: str = "data/current_affairs"
+    # Used only when pyq_run_startup_ingest=true. Prefer a smaller PDF (e.g. chemistry) for dev.
+    pyq_startup_subject_slug: str = "chemistry"
+    # If false, startup only syncs PDF filenames → DB (fast). Run ingest via admin or CLI when needed.
+    pyq_run_startup_ingest: bool = False
 
 
 settings = Settings()

@@ -11,6 +11,7 @@ import 'package:study_app/pages/leader_board_page.dart';
 import 'package:study_app/pages/login_page.dart';
 import 'package:study_app/pages/profile_page.dart';
 import 'package:study_app/pages/homePage_tabs/first_tab.dart';
+import 'package:study_app/pages/pyq_subjects_page.dart';
 import 'package:study_app/pages/homePage_tabs/secound_tab.dart';
 import 'package:study_app/pages/homePage_tabs/third_tab.dart';
 import 'package:study_app/widgets/custom_searchbar.dart';
@@ -274,6 +275,11 @@ class _HomePageWidgetState extends State<HomePageWidget> {
               switchOutCurve: Curves.easeIn,
               child: _selectedBottomIndex == 0
                   ? _buildTestHomeBody()
+                  : _selectedBottomIndex == 1
+                      ? PyqSubjectsPage(
+                          key: const ValueKey<int>(1),
+                          email: widget.email!,
+                        )
                   : _MenuPlaceholderPage(
                       key: ValueKey<int>(_selectedBottomIndex),
                       title: bottomItems[_selectedBottomIndex].label,
